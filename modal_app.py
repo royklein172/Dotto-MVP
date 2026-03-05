@@ -218,8 +218,8 @@ def process_job(job_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 @app.function(
-    memory=1024,
-    timeout=60,  # just HTTP I/O, returns in < 1 s
+    memory=2048,
+    timeout=300,  # up to 5 min — large audio uploads (2+ hr lectures ~50-100 MB)
     volumes={AUDIO_MOUNT: audio_volume},
 )
 @modal.asgi_app()
