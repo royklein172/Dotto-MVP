@@ -1,0 +1,254 @@
+{
+  "name": "PDF Exam Ingest: Google Drive → Pinecone",
+  "active": false,
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "nodes": [
+    {
+      "id": "node-gd-trigger",
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_DRIVE_FOLDER_ID",
+          "mode": "id"
+        },
+        "event": "fileCreated",
+        "filters": {
+          "mimeType": "application/pdf"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive-cred",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "node-gd-download",
+      "name": "Download PDF from Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [460, 300],
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "fileName": "={{ $json.name }}"
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive-cred",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "node-extract-pdf",
+      "name": "Extract Text from PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-llm-chain",
+      "name": "LLM Chain - Parse Exam Questions",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [900, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Extract ALL exam questions from the text below and return them as a JSON array.\n\nEach object must have exactly these fields:\n- \"question\": the full question text (string)\n- \"options\": an array of answer options (array of strings, e.g. [\"A. ...\", \"B. ...\"]). Use an empty array if the question is open-ended.\n- \"answer\": the correct answer or null if not provided (string or null)\n- \"topic\": your best guess at the topic/subject of the question (string)\n- \"source_file\": the name of the source PDF file (string)\n\nHere is the exam text:\n{{ $json.text }}",
+        "messages": {
+          "messageValues": [
+            {
+              "type": "SystemMessage",
+              "message": "You are a structured data extractor. Your output MUST be a raw, valid JSON array and nothing else. Do NOT include markdown code fences, backticks, explanations, greetings, or any text outside the JSON array. Your entire response must be directly parseable by JSON.parse() without any pre-processing."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-openai-llm",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [900, 500],
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0,
+          "maxTokens": 4096
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-cred",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "id": "node-parse-json",
+      "name": "Parse Agent JSON Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "// Basic LLM Chain returns its answer in json.text\nconst rawText = $input.first().json.text;\n\nlet questions;\ntry {\n  // Strip any accidental markdown code fences\n  const cleaned = rawText.replace(/```json|```/g, '').trim();\n  questions = JSON.parse(cleaned);\n} catch (e) {\n  throw new Error(`Failed to parse AI output as JSON: ${e.message}\\n\\nRaw output: ${rawText}`);\n}\n\nif (!Array.isArray(questions)) {\n  throw new Error('Expected a JSON array of questions, got: ' + typeof questions);\n}\n\n// Return one item per question so downstream nodes process them individually\nreturn questions.map(q => ({ json: q }));"
+      }
+    },
+    {
+      "id": "node-pinecone",
+      "name": "Upsert to Pinecone",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1,
+      "position": [1340, 300],
+      "parameters": {
+        "mode": "insert",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "YOUR_PINECONE_INDEX_NAME",
+          "mode": "list"
+        },
+        "options": {
+          "namespace": "exam-questions",
+          "clearNamespace": false
+        }
+      },
+      "credentials": {
+        "pineconeApi": {
+          "id": "pinecone-cred",
+          "name": "Pinecone account"
+        }
+      }
+    },
+    {
+      "id": "node-openai-embeddings",
+      "name": "OpenAI Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [1340, 500],
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-cred",
+          "name": "OpenAI account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download PDF from Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF from Drive": {
+      "main": [
+        [
+          {
+            "node": "Extract Text from PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text from PDF": {
+      "main": [
+        [
+          {
+            "node": "LLM Chain - Parse Exam Questions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Chain - Parse Exam Questions": {
+      "main": [
+        [
+          {
+            "node": "Parse Agent JSON Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Agent JSON Output": {
+      "main": [
+        [
+          {
+            "node": "Upsert to Pinecone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "LLM Chain - Parse Exam Questions",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Embeddings": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Upsert to Pinecone",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["rag", "exam", "pinecone", "google-drive"],
+  "pinData": {}
+}

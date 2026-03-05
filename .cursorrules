@@ -1,0 +1,18 @@
+# Dotto Project Rules
+
+## Tech Stack
+- Backend: Python (Modal.com serverless environment)
+- Frontend: React / Next.js with Tailwind CSS
+- AI Models: Fast-Whisper-Large (via Modal)
+- Automation: n8n (for RAG and external workflows)
+
+## Coding Standards
+- Always prioritize modularity and clean, readable code.
+- In Modal scripts: Always implement efficient resource management (use ffmpeg for audio extraction first).
+- In Frontend: Use functional components, Tailwind for styling, and keep API calls clean.
+- When generating code, always include basic error handling.
+
+## Workflow
+- When I ask for a feature, first explain the logic/architecture.
+- Break down complex tasks into smaller, manageable steps.
+- If a dependency is needed, suggest the exact installation command.

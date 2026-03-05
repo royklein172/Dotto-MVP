@@ -1,0 +1,37 @@
+# Dotto – Python dependencies
+# Install locally with: pip install -r requirements.txt
+# The Modal image installs these automatically inside the serverless container.
+
+# Modal SDK (CLI + Python client)
+modal>=0.62.0
+
+# Whisper inference engine (CTranslate2-based, much faster than openai-whisper)
+faster-whisper==1.0.3
+
+# CTranslate2 backend (pulled in by faster-whisper, pinned for ABI stability)
+ctranslate2>=4.0.0
+
+# PyTorch – GPU inference
+torch==2.2.2
+torchaudio==2.2.2
+
+# Required by faster-whisper internally
+requests
+
+# Required by torch internally
+numpy
+
+# ffmpeg-python is NOT required – we call the ffmpeg binary directly via subprocess.
+# Make sure ffmpeg is installed on your local machine for local testing:
+#   macOS:  brew install ffmpeg
+#   Ubuntu: sudo apt install ffmpeg
+
+# ── Relevance Engine ────────────────────────────────────────────────────────
+# OpenAI Python SDK (embeddings + GPT-4o chat)
+openai>=1.30.0
+
+# Pinecone serverless client
+pinecone>=4.0.0
+
+# Pydantic v2 – strict LLM output validation
+pydantic>=2.0.0
