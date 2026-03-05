@@ -177,14 +177,14 @@ def process_job(job_id: str) -> None:
                         scored[idx] = {**seg, "relevance": relevance}
 
                 done_count[0] += 1
-                # Write progress every 10 segments
+                # Write progress every 10 segments (use async API — we're inside asyncio.run)
                 if done_count[0] % 10 == 0 or done_count[0] == total:
                     pct = 50 + int(done_count[0] / total * 49)
-                    job_dict[job_id] = {
+                    await job_dict.put.aio(job_id, {
                         "status": "scoring",
                         "message": f"Analyzing exam relevance… {done_count[0]} / {total} segments",
                         "progress": pct,
-                    }
+                    })
 
             await asyncio.gather(*(score_one(i, s) for i, s in enumerate(result["segments"])))
             return scored  # type: ignore[return-value]
@@ -250,20 +250,21 @@ def serve():
 
         with open(audio_path, "wb") as f:
             f.write(content)
-        audio_volume.commit()
+        # Use async Modal APIs — blocking calls in async context cause silent failures
+        await audio_volume.commit.aio()
 
-        job_dict[job_id] = {
+        await job_dict.put.aio(job_id, {
             "status":   "queued",
             "message":  "Job queued, starting soon…",
             "progress": 0,
-        }
-        process_job.spawn(job_id)
+        })
+        await process_job.spawn.aio(job_id)
 
         return {"job_id": job_id}
 
     @web_app.get("/status/{job_id}")
     async def status_route(job_id: str):
-        state = job_dict.get(job_id)
+        state = await job_dict.get.aio(job_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Job not found")
         # Never return the full result in status — only return it once done
