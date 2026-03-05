@@ -121,10 +121,8 @@ def _build_result(segments_iter, info) -> dict:
 @app.function(
     # Request a GPU only for the transcription step; A10G is a cost-efficient
     # choice for whisper-large.  Use gpu=modal.gpu.T4() for a cheaper option.
-    gpu=modal.gpu.A10G(),
-    # Keep memory generous enough to hold the model weights in VRAM.
+    gpu="A10G",
     memory=8192,
-    # Cold-start timeout – model download can take a few minutes the first time.
     timeout=600,
     volumes={
         VOLUME_MOUNT: video_volume,
@@ -201,33 +199,46 @@ def transcribe_video(video_filename: str, model_size: str = "large-v3") -> dict:
 @app.function(
     image=dotto_image,
     secrets=[dotto_secret],
-    timeout=300,
+    timeout=600,
 )
 def analyze_relevance(segments: list[dict]) -> list[dict]:
     """
-    Score each transcript segment against the Pinecone exam database.
-    Returns the same list with a ``relevance`` key added to every item.
+    Score every transcript segment against the Pinecone exam database.
+    All segments are processed concurrently (up to MAX_CONCURRENT at a time)
+    so a 400-segment lecture takes ~30-60 s instead of ~13 minutes.
     """
+    import asyncio
     import sys
     sys.path.insert(0, "/app")
     from relevance_engine import analyze_transcript_relevance
 
-    enriched: list[dict] = []
+    MAX_CONCURRENT = 20  # stay well under OpenAI RPM limits
+
     total = len(segments)
+    print(f"[dotto-relevance] Scoring {total} segments (parallel, max {MAX_CONCURRENT}) …")
 
-    for idx, seg in enumerate(segments):
-        text = seg.get("text", "").strip()
-        print(f"[dotto-relevance] Scoring segment {idx + 1}/{total} …")
-        if not text:
-            enriched.append({**seg, "relevance": None})
-            continue
-        try:
-            relevance = analyze_transcript_relevance(text)
-        except Exception as exc:
-            print(f"[dotto-relevance] Segment {idx + 1} failed: {exc}")
-            relevance = {"error": str(exc)}
-        enriched.append({**seg, "relevance": relevance})
+    async def score_all() -> list[dict]:
+        sem = asyncio.Semaphore(MAX_CONCURRENT)
+        results: list[dict | None] = [None] * total
 
+        async def score_one(idx: int, seg: dict) -> None:
+            text = seg.get("text", "").strip()
+            if not text:
+                results[idx] = {**seg, "relevance": None}
+                return
+            async with sem:
+                try:
+                    relevance = await asyncio.to_thread(analyze_transcript_relevance, text)
+                except Exception as exc:
+                    print(f"[dotto-relevance] Segment {idx + 1} failed: {exc}")
+                    relevance = {"error": str(exc)}
+                results[idx] = {**seg, "relevance": relevance}
+
+        await asyncio.gather(*(score_one(i, s) for i, s in enumerate(segments)))
+        return results  # type: ignore[return-value]
+
+    enriched = asyncio.run(score_all())
+    print(f"[dotto-relevance] Done scoring {total} segments.")
     return enriched
 
 
@@ -236,7 +247,7 @@ def analyze_relevance(segments: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 @app.function(
-    gpu=modal.gpu.A10G(),
+    gpu="A10G",
     memory=8192,
     timeout=1200,  # 20 min — covers long lectures + relevance scoring
     secrets=[dotto_secret],
