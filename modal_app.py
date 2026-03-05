@@ -238,15 +238,16 @@ def analyze_relevance(segments: list[dict]) -> list[dict]:
 @app.function(
     gpu=modal.gpu.A10G(),
     memory=8192,
-    timeout=600,
+    timeout=1200,  # 20 min — covers long lectures + relevance scoring
     secrets=[dotto_secret],
     volumes={MODEL_CACHE: model_volume},
 )
 @modal.asgi_app()
 def serve():
     """
-    Returns a FastAPI ASGI app.  Transcribes the uploaded video with Whisper,
-    then scores every segment for exam relevance via GPT-4o + Pinecone.
+    Returns a FastAPI ASGI app.
+    Accepts a pre-extracted audio file (MP3/WAV) from the browser,
+    transcribes it with Whisper, then scores segments for exam relevance.
     """
     from fastapi import FastAPI, File, HTTPException, UploadFile
     from faster_whisper import WhisperModel
@@ -255,19 +256,15 @@ def serve():
 
     @web_app.post("/")
     async def transcribe_route(video: UploadFile = File(...)):
-        suffix = os.path.splitext(video.filename or "video.mp4")[1] or ".mp4"
+        # The browser sends an MP3 extracted by ffmpeg.wasm — accept any audio format.
+        suffix = os.path.splitext(video.filename or "audio.mp3")[1] or ".mp3"
 
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_vid:
-            video_path = tmp_vid.name
-            tmp_vid.write(await video.read())
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_aud:
-            audio_path = tmp_aud.name
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_audio:
+            audio_path = tmp_audio.name
+            tmp_audio.write(await video.read())
 
         try:
-            print(f"[dotto-web] Extracting audio from '{video.filename}' …")
-            _extract_audio(video_path, audio_path)
-
+            print(f"[dotto-web] Received audio file '{video.filename}' ({os.path.getsize(audio_path) // 1024} KB)")
             print("[dotto-web] Loading faster-whisper large-v3 …")
             model = WhisperModel(
                 "large-v3",
@@ -287,9 +284,8 @@ def serve():
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
-            for p in (video_path, audio_path):
-                if os.path.exists(p):
-                    os.remove(p)
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
 
         print(f"[dotto-web] Transcription done. Scoring {len(result['segments'])} segments …")
         result["segments"] = analyze_relevance.remote(result["segments"])
